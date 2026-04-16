@@ -2,13 +2,18 @@ import os
 import cv2
 import time
 import uuid
+import json
+import asyncio
 import sqlite3
 import threading
+import requests
+import numpy as np
 from datetime import datetime
-from collections import defaultdict
+from collections import defaultdict, Counter
+from typing import List
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -32,6 +37,14 @@ MIN_CONSECUTIVE_FRAMES = 3
 ALERT_COOLDOWN_SECONDS = 20
 
 # =========================
+# OLLAMA
+# =========================
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
+MODEL_NAME = os.getenv("OLLAMA_MODEL", "llama3")
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+
+# =========================
 # APP
 # =========================
 app = FastAPI(title="AgroVision AI")
@@ -44,12 +57,31 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 model = YOLO(MODEL_PATH)
+cv2.setLogLevel(0)  # suprime warnings do OpenCV no console
 
 last_frame = None
 last_frame_lock = threading.Lock()
 
 detection_state = defaultdict(int)
 last_alert_time = defaultdict(lambda: 0.0)
+
+active_camera_source = CAMERA_SOURCE
+camera_source_lock = threading.Lock()
+
+
+def list_cameras() -> list:
+    with camera_source_lock:
+        active = active_camera_source
+    available = []
+    for i in range(10):
+        if i == active:
+            available.append(i)  # câmera ativa já está aberta, não testa
+            continue
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            available.append(i)
+            cap.release()
+    return available
 
 # =========================
 # BANCO DE DADOS
@@ -157,20 +189,41 @@ def should_alert(label: str):
 
 
 def process_stream():
-    global last_frame
+    global last_frame, active_camera_source
 
-    cap = cv2.VideoCapture(CAMERA_SOURCE)
-
-    if not cap.isOpened():
-        print("Erro ao abrir câmera.")
-        return
-
-    print("Câmera iniciada com sucesso.")
+    current_source = None
+    cap = None
 
     while True:
+        # Verifica se houve troca de câmera ou ainda não abriu nenhuma
+        with camera_source_lock:
+            requested = active_camera_source
+
+        if requested != current_source:
+            if cap is not None:
+                cap.release()
+            current_source = requested
+            cap = cv2.VideoCapture(current_source)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                print(f"[Camera] Câmera {current_source} aberta.")
+            else:
+                print(f"[Camera] Câmera {current_source} não disponível. Tentando novamente em 3s...")
+                cap.release()
+                cap = None
+                time.sleep(3)
+                continue
+
+        if cap is None or not cap.isOpened():
+            time.sleep(3)
+            continue
+
         ok, frame = cap.read()
         if not ok:
-            time.sleep(1)
+            print(f"[Camera] Falha ao ler frame. Reconectando em 3s...")
+            cap.release()
+            cap = None
+            time.sleep(3)
             continue
 
         results = model(frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
@@ -233,6 +286,8 @@ def startup_event():
     init_db()
     thread = threading.Thread(target=process_stream, daemon=True)
     thread.start()
+    warmup_thread = threading.Thread(target=warmup_ollama, daemon=True)
+    warmup_thread.start()
 
 # =========================
 # ROTAS
@@ -245,7 +300,25 @@ def dashboard(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "AgroVision AI"}
+    return {"status": "ok", "service": "AgroVision AI", "ollama": get_ollama_status()}
+
+
+@app.get("/cameras")
+def get_cameras():
+    with camera_source_lock:
+        current = active_camera_source
+    return JSONResponse(content={"cameras": list_cameras(), "active": current})
+
+
+class CameraSelectRequest(BaseModel):
+    index: int
+
+@app.post("/camera/select")
+def select_camera(req: CameraSelectRequest):
+    global active_camera_source
+    with camera_source_lock:
+        active_camera_source = req.index
+    return JSONResponse(content={"selected": req.index})
 
 
 @app.get("/events")
@@ -253,148 +326,196 @@ def get_events():
     return JSONResponse(content=list_events(50))
 
 
+async def generate_mjpeg():
+    while True:
+        with last_frame_lock:
+            frame = last_frame.copy() if last_frame is not None else None
+
+        if frame is None:
+            await asyncio.sleep(0.1)
+            continue
+
+        success, buffer = cv2.imencode(".jpg", frame)
+        if not success:
+            await asyncio.sleep(0.1)
+            continue
+
+        yield (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n\r\n"
+            + buffer.tobytes()
+            + b"\r\n"
+        )
+        await asyncio.sleep(0.05)
+
+
+@app.get("/video_feed")
+async def video_feed():
+    return StreamingResponse(
+        generate_mjpeg(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+def _placeholder_frame() -> bytes:
+    img = np.zeros((360, 640, 3), dtype=np.uint8)
+    cv2.putText(img, "Aguardando camera...", (120, 180),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (180, 180, 180), 2)
+    _, buf = cv2.imencode(".jpg", img)
+    return buf.tobytes()
+
+
 @app.get("/frame")
 def get_frame():
     global last_frame
 
     with last_frame_lock:
-        if last_frame is None:
-            return JSONResponse(
-                content={"message": "Ainda sem frame disponível."},
-                status_code=503
-            )
+        frame_data = last_frame
 
-        success, buffer = cv2.imencode(".jpg", last_frame)
-        if not success:
-            return JSONResponse(
-                content={"message": "Erro ao converter frame."},
-                status_code=500
-            )
+    if frame_data is None:
+        return Response(content=_placeholder_frame(), media_type="image/jpeg")
 
-        return Response(content=buffer.tobytes(), media_type="image/jpeg")
+    success, buffer = cv2.imencode(".jpg", frame_data)
+    if not success:
+        return Response(content=_placeholder_frame(), media_type="image/jpeg")
+
+    return Response(content=buffer.tobytes(), media_type="image/jpeg")
 
 
 # =========================
-# CHAT LOCAL (baseado em regras)
+# CHAT COM OLLAMA / LLAMA
 # =========================
+class Message(BaseModel):
+    role: str
+    content: str
+
+
 class ChatRequest(BaseModel):
     message: str
+    history: List[Message] = []
 
 
-LABEL_TRADUCAO = {
-    "person": "pessoa",
-    "car": "carro",
-    "motorcycle": "motocicleta",
-    "truck": "caminhão",
-    "bus": "ônibus",
-}
-
-PALAVRAS_CHAVE = {
-    "último": "ultimo_evento",
-    "ultimo": "ultimo_evento",
-    "recente": "ultimo_evento",
-    "detectado": "ultimo_evento",
-    "detecção": "ultimo_evento",
-    "deteccao": "ultimo_evento",
-    "quando": "ultimo_evento",
-    "horário": "ultimo_evento",
-    "horario": "ultimo_evento",
-    "quantos": "contagem",
-    "quantidade": "contagem",
-    "total": "contagem",
-    "eventos": "contagem",
-    "imagem": "imagem",
-    "foto": "imagem",
-    "evidência": "imagem",
-    "evidencia": "imagem",
-    "câmera": "camera",
-    "camera": "camera",
-    "frame": "camera",
-    "status": "camera",
-    "ajuda": "ajuda",
-    "help": "ajuda",
-    "comandos": "ajuda",
-    "o que": "ajuda",
-}
+class ChatResponse(BaseModel):
+    answer: str
+    history: List[Message]
 
 
-def interpretar_pergunta(message: str) -> str:
-    msg = message.lower()
-    for palavra, intencao in PALAVRAS_CHAVE.items():
-        if palavra in msg:
-            return intencao
-    return "desconhecido"
+def get_ollama_status() -> str:
+    try:
+        base_url = OLLAMA_URL.rsplit("/api/", 1)[0]
+        resp = requests.get(f"{base_url}/api/tags", timeout=3)
+        if resp.ok:
+            return "online"
+        return "erro"
+    except Exception:
+        return "offline"
 
 
-@app.post("/chat")
-def chat(req: ChatRequest):
-    last_event = get_last_event()
-    todos_eventos = list_events(50)
-    intencao = interpretar_pergunta(req.message)
-
-    if intencao == "ultimo_evento":
-        if not last_event:
-            answer = "Nenhum evento foi registrado pelo sistema até o momento."
-        else:
-            label_pt = LABEL_TRADUCAO.get(last_event["label"], last_event["label"])
-            answer = (
-                f"O último evento detectado foi:\n"
-                f"- Tipo: {label_pt}\n"
-                f"- Data/Hora: {last_event['event_time']}\n"
-                f"- Confiança: {last_event['confidence']:.2%}\n"
-                f"- ID do registro: {last_event['id']}"
-            )
-
-    elif intencao == "contagem":
-        if not todos_eventos:
-            answer = "Nenhum evento registrado até o momento."
-        else:
-            contagem = {}
-            for ev in todos_eventos:
-                label_pt = LABEL_TRADUCAO.get(ev["label"], ev["label"])
-                contagem[label_pt] = contagem.get(label_pt, 0) + 1
-            linhas = "\n".join(f"- {k}: {v}" for k, v in contagem.items())
-            answer = f"Total de {len(todos_eventos)} eventos registrados:\n{linhas}"
-
-    elif intencao == "imagem":
-        if not last_event:
-            answer = "Nenhum evento registrado. Ainda não há imagens de evidência."
-        else:
-            answer = (
-                f"A imagem do último evento está disponível em:\n"
-                f"{last_event['image_path']}\n\n"
-                f"Abra o link na tabela de eventos para visualizá-la."
-            )
-
-    elif intencao == "camera":
-        with last_frame_lock:
-            tem_frame = last_frame is not None
-        status = "ativa e transmitindo" if tem_frame else "sem sinal no momento"
-        answer = f"A câmera está {status}. Acesse /frame para ver o último frame capturado."
-
-    elif intencao == "ajuda":
-        answer = (
-            "Sou o assistente do AgroVision AI. Você pode me perguntar:\n"
-            "- 'O que foi detectado no último evento?'\n"
-            "- 'Quantos eventos foram registrados?'\n"
-            "- 'Onde está a imagem do último evento?'\n"
-            "- 'Qual é o status da câmera?'"
+def build_chat_messages(message: str, history: List[Message]) -> list:
+    system_msg = {
+        "role": "system",
+        "content": (
+            "Você é um assistente do sistema AgroVision AI, especializado em monitoramento rural. "
+            "Responda em português, de forma clara, objetiva e útil. "
+            "Use APENAS os dados fornecidos abaixo como fonte de verdade. "
+            "Nunca invente IDs, horários, objetos ou contagens que não estejam listados aqui."
         )
+    }
+    messages = [system_msg]
 
+    eventos = list_events(1000)
+    if eventos:
+        linhas = []
+        for ev in eventos:
+            linhas.append(
+                f"  - [{ev['event_time']}] {ev['label']} "
+                f"(confiança: {ev['confidence']:.2f}, id: {ev['id']})"
+            )
+        contagem = Counter(ev["label"] for ev in eventos)
+        resumo = ", ".join(f"{k}: {v}" for k, v in contagem.items())
+
+        ctx = (
+            f"DADOS REAIS DO BANCO (últimos {len(eventos)} eventos, do mais recente ao mais antigo):\n"
+            + "\n".join(linhas)
+            + f"\n\nResumo por tipo: {resumo}"
+            + f"\nTotal listado acima: {len(eventos)} eventos."
+        )
+        messages.append({"role": "system", "content": ctx})
     else:
-        if last_event:
-            label_pt = LABEL_TRADUCAO.get(last_event["label"], last_event["label"])
-            answer = (
-                f"Não entendi exatamente sua pergunta, mas posso informar que o último evento "
-                f"registrado foi a detecção de {label_pt} em {last_event['event_time']}.\n\n"
-                f"Tente perguntar sobre: último evento, quantidade de eventos, imagem ou câmera."
-            )
-        else:
-            answer = (
-                "Não entendi sua pergunta. Tente perguntar sobre:\n"
-                "- último evento detectado\n"
-                "- quantidade de eventos\n"
-                "- status da câmera"
-            )
+        messages.append({"role": "system", "content": "Nenhum evento registrado no banco ainda."})
 
-    return JSONResponse(content={"answer": answer})
+    for h in history:
+        messages.append(h.dict())
+
+    messages.append({"role": "user", "content": message})
+    return messages
+
+
+def ask_ollama(message: str, history: List[Message]):
+    payload = {
+        "model": MODEL_NAME,
+        "messages": build_chat_messages(message, history),
+        "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
+    }
+    response = requests.post(OLLAMA_URL, json=payload, timeout=(10, OLLAMA_TIMEOUT))
+    response.raise_for_status()
+    return response.json()["message"]["content"]
+
+
+def stream_ollama(message: str, history: List[Message]):
+    payload = {
+        "model": MODEL_NAME,
+        "messages": build_chat_messages(message, history),
+        "stream": True,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
+    }
+    full_response = ""
+    try:
+        with requests.post(OLLAMA_URL, json=payload, stream=True, timeout=(10, OLLAMA_TIMEOUT)) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                chunk = json.loads(line)
+                delta = chunk.get("message", {}).get("content", "")
+                if delta:
+                    full_response += delta
+                    yield json.dumps({"delta": delta}) + "\n"
+                if chunk.get("done"):
+                    new_history = list(history) + [
+                        Message(role="user", content=message),
+                        Message(role="assistant", content=full_response),
+                    ]
+                    yield json.dumps({"done": True, "history": [h.dict() for h in new_history]}) + "\n"
+    except Exception as exc:
+        yield json.dumps({"error": str(exc)}) + "\n"
+
+
+def warmup_ollama():
+    try:
+        ask_ollama("Responda apenas: pronto", [])
+        print(f"[Ollama] Modelo {MODEL_NAME} aquecido.")
+    except Exception as exc:
+        print(f"[Ollama] Warmup falhou: {exc}")
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(req: ChatRequest):
+    try:
+        answer = ask_ollama(req.message, req.history)
+        new_history = list(req.history) + [
+            Message(role="user", content=req.message),
+            Message(role="assistant", content=answer),
+        ]
+        return ChatResponse(answer=answer, history=new_history)
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@app.post("/chat/stream")
+def chat_stream(req: ChatRequest):
+    return StreamingResponse(
+        stream_ollama(req.message, req.history),
+        media_type="application/x-ndjson",
+    )

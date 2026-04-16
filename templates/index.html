@@ -17,13 +17,8 @@
             margin: 0 auto;
         }
 
-        h1 {
-            margin-bottom: 8px;
-        }
-
-        p {
-            color: #555;
-        }
+        h1 { margin-bottom: 8px; }
+        p { color: #555; }
 
         .grid {
             display: grid;
@@ -57,9 +52,7 @@
             border-bottom: 1px solid #e5e7eb;
         }
 
-        th {
-            background: #f9fafb;
-        }
+        th { background: #f9fafb; }
 
         .badge {
             background: #e8f5e9;
@@ -70,15 +63,10 @@
             display: inline-block;
         }
 
-        a {
-            color: #0b57d0;
-            text-decoration: none;
-        }
+        a { color: #0b57d0; text-decoration: none; }
+        a:hover { text-decoration: underline; }
 
-        a:hover {
-            text-decoration: underline;
-        }
-
+        /* ---- Chat ---- */
         .chat-box {
             display: flex;
             flex-direction: column;
@@ -86,11 +74,55 @@
             margin-top: 10px;
         }
 
-        .chat-box textarea {
-            width: 100%;
-            min-height: 100px;
+        /* Histórico de conversa */
+        .chat-history {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 360px;
+            overflow-y: auto;
+            padding: 4px 2px;
+        }
+
+        .chat-bubble {
+            padding: 10px 14px;
+            border-radius: 12px;
+            max-width: 88%;
+            white-space: pre-wrap;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .chat-bubble.user {
+            background: #0b57d0;
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+
+        .chat-bubble.assistant {
+            background: #f1f5f9;
+            color: #1e293b;
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+            border: 1px solid #e2e8f0;
+        }
+
+        .chat-bubble.assistant.streaming {
+            border-color: #0b57d0;
+        }
+
+        .chat-input-row {
+            display: flex;
+            gap: 8px;
+            align-items: flex-end;
+        }
+
+        .chat-input-row textarea {
+            flex: 1;
+            min-height: 60px;
             resize: vertical;
-            padding: 12px;
+            padding: 10px 12px;
             border-radius: 10px;
             border: 1px solid #d1d5db;
             font-size: 14px;
@@ -98,8 +130,12 @@
             box-sizing: border-box;
         }
 
-        .chat-box button {
-            width: fit-content;
+        .chat-input-row textarea:focus {
+            outline: none;
+            border-color: #0b57d0;
+        }
+
+        .btn-primary {
             background: #0b57d0;
             color: white;
             border: none;
@@ -107,31 +143,45 @@
             padding: 10px 18px;
             cursor: pointer;
             font-size: 14px;
+            white-space: nowrap;
         }
 
-        .chat-box button:hover {
+        .btn-primary:disabled {
+            background: #93b4e6;
+            cursor: not-allowed;
+        }
+
+        .btn-primary:not(:disabled):hover {
             background: #084298;
         }
 
-        .chat-response {
-            background: #f9fafb;
-            border: 1px solid #e5e7eb;
+        .btn-secondary {
+            background: transparent;
+            color: #64748b;
+            border: 1px solid #cbd5e1;
             border-radius: 10px;
-            padding: 14px;
-            min-height: 70px;
-            white-space: pre-wrap;
-            color: #222;
+            padding: 8px 14px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .btn-secondary:hover {
+            background: #f1f5f9;
+        }
+
+        .chat-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
 
         .chat-status {
-            font-size: 13px;
-            color: #666;
+            font-size: 12px;
+            color: #94a3b8;
         }
 
         @media (max-width: 900px) {
-            .grid {
-                grid-template-columns: 1fr;
-            }
+            .grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -143,7 +193,16 @@
         <div class="grid">
             <div class="card">
                 <h2>Último frame</h2>
-                <img src="/frame" alt="Último frame da câmera">
+                <img id="live-feed" src="/frame" alt="Câmera ao vivo">
+
+                <div style="margin-top:14px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <select id="camera-select" style="flex:1; padding:8px 10px; border-radius:8px; border:1px solid #d1d5db; font-size:14px;">
+                        <option value="">Carregando câmeras...</option>
+                    </select>
+                    <button onclick="applyCamera()" class="btn-primary" id="camera-apply-btn">Usar</button>
+                    <button onclick="loadCameras()" class="btn-secondary">Atualizar lista</button>
+                </div>
+                <div id="camera-status" style="font-size:12px; color:#94a3b8; margin-top:6px;"></div>
             </div>
 
             <div class="card">
@@ -172,62 +231,242 @@
         </div>
 
         <div class="card" style="margin-top: 20px;">
-            <h2>Chat de interpretação de eventos</h2>
-            <p>Faça perguntas sobre o último evento detectado pelo sistema.</p>
+            <h2>Chat — Assistente AgroVision (Llama local)</h2>
+            <p>Faça perguntas sobre os eventos detectados. O contexto do último evento é enviado automaticamente.</p>
 
             <div class="chat-box">
-                <textarea
-                    id="chat-question"
-                    placeholder="Exemplo: o que foi detectado no último evento?"
-                ></textarea>
+                <!-- Histórico de mensagens -->
+                <div class="chat-history" id="chat-history">
+                    <div class="chat-bubble assistant">
+                        Olá! Sou o assistente do AgroVision AI. Pergunte sobre os eventos detectados, câmera ou qualquer coisa relacionada ao sistema.
+                    </div>
+                </div>
 
-                <button onclick="sendQuestion()">Enviar pergunta</button>
+                <!-- Campo de entrada -->
+                <div class="chat-input-row">
+                    <textarea
+                        id="chat-question"
+                        placeholder="Ex: o que foi detectado no último evento? qual a confiança?"
+                        onkeydown="handleKey(event)"
+                    ></textarea>
+                    <button id="chat-send-btn" class="btn-primary" onclick="sendQuestion()">Enviar</button>
+                </div>
 
-                <div class="chat-status" id="chat-status"></div>
-                <div class="chat-response" id="chat-response">
-A resposta do sistema aparecerá aqui.
+                <!-- Rodapé: status e limpar -->
+                <div class="chat-footer">
+                    <span class="chat-status" id="chat-status">Pronto.</span>
+                    <button class="btn-secondary" onclick="clearHistory()">Limpar histórico</button>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
+        // ── Seletor de câmera ─────────────────────────────────────────
+        async function loadCameras() {
+            const select = document.getElementById("camera-select");
+            const status = document.getElementById("camera-status");
+            status.textContent = "Detectando câmeras...";
+            try {
+                const data = await fetch("/cameras").then(r => r.json());
+                select.innerHTML = "";
+                if (data.cameras.length === 0) {
+                    select.innerHTML = "<option value=''>Nenhuma câmera encontrada</option>";
+                    status.textContent = "Nenhuma câmera disponível.";
+                    return;
+                }
+                data.cameras.forEach(idx => {
+                    const opt = document.createElement("option");
+                    opt.value = idx;
+                    opt.textContent = `Câmera ${idx}`;
+                    if (idx === data.active) opt.selected = true;
+                    select.appendChild(opt);
+                });
+                status.textContent = `${data.cameras.length} câmera(s) encontrada(s). Ativa: Câmera ${data.active}.`;
+            } catch {
+                status.textContent = "Erro ao listar câmeras.";
+            }
+        }
+
+        async function applyCamera() {
+            const select = document.getElementById("camera-select");
+            const status = document.getElementById("camera-status");
+            const btn = document.getElementById("camera-apply-btn");
+            const idx = parseInt(select.value);
+            if (isNaN(idx)) return;
+            btn.disabled = true;
+            status.textContent = "Trocando câmera...";
+            try {
+                await fetch("/camera/select", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ index: idx })
+                });
+                status.textContent = `Câmera ${idx} ativada.`;
+            } catch {
+                status.textContent = "Erro ao trocar câmera.";
+            }
+            btn.disabled = false;
+        }
+
+        // Carrega câmeras ao abrir a página
+        loadCameras();
+
+        // ── Feed ao vivo ──────────────────────────────────────────────
+        (function refreshFeed() {
+            const img = document.getElementById("live-feed");
+            const next = new Image();
+            let done = false;
+
+            const timeout = setTimeout(() => {
+                if (!done) { done = true; setTimeout(refreshFeed, 200); }
+            }, 1500); // se travar por 1.5s, tenta de novo
+
+            next.onload = () => {
+                if (done) return; done = true;
+                clearTimeout(timeout);
+                img.src = next.src;
+                setTimeout(refreshFeed, 80);
+            };
+            next.onerror = () => {
+                if (done) return; done = true;
+                clearTimeout(timeout);
+                setTimeout(refreshFeed, 2000);
+            };
+            next.src = "/frame?t=" + Date.now();
+        })();
+
+        // ── Chat ─────────────────────────────────────────────────────
+        // Histórico de conversa mantido no frontend
+        let chatHistory = [];
+
+        function handleKey(event) {
+            // Ctrl+Enter ou Cmd+Enter envia
+            if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                sendQuestion();
+            }
+        }
+
+        function addBubble(role, text, streaming = false) {
+            const history = document.getElementById("chat-history");
+            const bubble = document.createElement("div");
+            bubble.className = "chat-bubble " + role + (streaming ? " streaming" : "");
+            bubble.textContent = text;
+            history.appendChild(bubble);
+            history.scrollTop = history.scrollHeight;
+            return bubble;
+        }
+
+        function setStatus(text) {
+            document.getElementById("chat-status").textContent = text;
+        }
+
+        function setSendDisabled(disabled) {
+            document.getElementById("chat-send-btn").disabled = disabled;
+        }
+
         async function sendQuestion() {
             const questionField = document.getElementById("chat-question");
-            const responseBox = document.getElementById("chat-response");
-            const statusBox = document.getElementById("chat-status");
-
             const message = questionField.value.trim();
+            if (!message) return;
 
-            if (!message) {
-                responseBox.innerText = "Digite uma pergunta antes de enviar.";
-                return;
-            }
+            questionField.value = "";
+            setSendDisabled(true);
+            setStatus("Consultando o modelo local...");
 
-            statusBox.innerText = "Consultando o último evento...";
-            responseBox.innerText = "Processando...";
+            // Exibe a mensagem do usuário
+            addBubble("user", message);
+
+            // Bolha da IA que vai sendo preenchida via streaming
+            const aiBubble = addBubble("assistant", "▍", true);
+
+            const startedAt = Date.now();
+            let fullAnswer = "";
 
             try {
-                const response = await fetch("/chat", {
+                const response = await fetch("/chat/stream", {
                     method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({ message: message })
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ message: message, history: chatHistory })
                 });
 
                 if (!response.ok) {
-                    throw new Error("Erro ao consultar o chat.");
+                    throw new Error("Erro HTTP " + response.status);
                 }
 
-                const data = await response.json();
-                responseBox.innerText = data.answer || "Nenhuma resposta retornada.";
-                statusBox.innerText = "Resposta gerada com sucesso.";
-            } catch (error) {
-                responseBox.innerText = "Não foi possível obter resposta do chat.";
-                statusBox.innerText = "Erro ao consultar o serviço.";
-                console.error(error);
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const text = decoder.decode(value, { stream: true });
+                    const lines = text.split("\n").filter(l => l.trim());
+
+                    for (const line of lines) {
+                        const chunk = JSON.parse(line);
+
+                        if (chunk.error) {
+                            aiBubble.textContent = "Erro: " + chunk.error;
+                            aiBubble.classList.remove("streaming");
+                            setStatus("Erro ao consultar o Ollama. Verifique se ele está rodando.");
+                            setSendDisabled(false);
+                            return;
+                        }
+
+                        if (chunk.delta) {
+                            fullAnswer += chunk.delta;
+                            aiBubble.textContent = fullAnswer;
+                            document.getElementById("chat-history").scrollTop =
+                                document.getElementById("chat-history").scrollHeight;
+                        }
+
+                        if (chunk.done) {
+                            aiBubble.classList.remove("streaming");
+                            // Atualiza histórico local com o retornado pelo backend
+                            if (chunk.history) {
+                                chatHistory = chunk.history;
+                            }
+                            const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+                            setStatus(`Resposta em ${elapsed}s · ${chatHistory.length / 2 | 0} trocas no histórico`);
+                        }
+                    }
+                }
+
+            } catch (err) {
+                // Fallback para endpoint síncrono
+                setStatus("Streaming falhou, tentando modo normal...");
+                try {
+                    const resp = await fetch("/chat", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ message: message, history: chatHistory })
+                    });
+                    const data = await resp.json();
+                    if (data.error) throw new Error(data.error);
+                    aiBubble.textContent = data.answer;
+                    aiBubble.classList.remove("streaming");
+                    if (data.history) chatHistory = data.history;
+                    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+                    setStatus(`Resposta em ${elapsed}s.`);
+                } catch (fallbackErr) {
+                    aiBubble.textContent = "Não foi possível obter resposta. Verifique se o Ollama está rodando.";
+                    aiBubble.classList.remove("streaming");
+                    setStatus("Erro: " + fallbackErr.message);
+                }
             }
+
+            setSendDisabled(false);
+        }
+
+        function clearHistory() {
+            chatHistory = [];
+            const historyDiv = document.getElementById("chat-history");
+            historyDiv.innerHTML = "";
+            addBubble("assistant", "Histórico limpo. Como posso ajudar?");
+            setStatus("Histórico limpo.");
         }
     </script>
 </body>
