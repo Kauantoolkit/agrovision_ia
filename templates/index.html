@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>AgroVision AI</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f6f8;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            margin-bottom: 8px;
+        }
+
+        p {
+            color: #555;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 14px;
+            padding: 18px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+
+        img {
+            width: 100%;
+            border-radius: 10px;
+            border: 1px solid #ddd;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 10px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        th {
+            background: #f9fafb;
+        }
+
+        .badge {
+            background: #e8f5e9;
+            color: #1b5e20;
+            padding: 5px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            display: inline-block;
+        }
+
+        a {
+            color: #0b57d0;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .chat-box {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 10px;
+        }
+
+        .chat-box textarea {
+            width: 100%;
+            min-height: 100px;
+            resize: vertical;
+            padding: 12px;
+            border-radius: 10px;
+            border: 1px solid #d1d5db;
+            font-size: 14px;
+            font-family: Arial, sans-serif;
+            box-sizing: border-box;
+        }
+
+        .chat-box button {
+            width: fit-content;
+            background: #0b57d0;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            padding: 10px 18px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .chat-box button:hover {
+            background: #084298;
+        }
+
+        .chat-response {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 14px;
+            min-height: 70px;
+            white-space: pre-wrap;
+            color: #222;
+        }
+
+        .chat-status {
+            font-size: 13px;
+            color: #666;
+        }
+
+        @media (max-width: 900px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AgroVision AI</h1>
+        <p>Protótipo de monitoramento rural com detecção de pessoas e veículos.</p>
+
+        <div class="grid">
+            <div class="card">
+                <h2>Último frame</h2>
+                <img src="/frame" alt="Último frame da câmera">
+            </div>
+
+            <div class="card">
+                <h2>Eventos recentes</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Data/Hora</th>
+                            <th>Tipo</th>
+                            <th>Confiança</th>
+                            <th>Evidência</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for event in events %}
+                        <tr>
+                            <td>{{ event.event_time }}</td>
+                            <td><span class="badge">{{ event.label }}</span></td>
+                            <td>{{ "%.2f"|format(event.confidence) }}</td>
+                            <td><a href="{{ event.image_path }}" target="_blank">Abrir</a></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card" style="margin-top: 20px;">
+            <h2>Chat de interpretação de eventos</h2>
+            <p>Faça perguntas sobre o último evento detectado pelo sistema.</p>
+
+            <div class="chat-box">
+                <textarea
+                    id="chat-question"
+                    placeholder="Exemplo: o que foi detectado no último evento?"
+                ></textarea>
+
+                <button onclick="sendQuestion()">Enviar pergunta</button>
+
+                <div class="chat-status" id="chat-status"></div>
+                <div class="chat-response" id="chat-response">
+A resposta do sistema aparecerá aqui.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function sendQuestion() {
+            const questionField = document.getElementById("chat-question");
+            const responseBox = document.getElementById("chat-response");
+            const statusBox = document.getElementById("chat-status");
+
+            const message = questionField.value.trim();
+
+            if (!message) {
+                responseBox.innerText = "Digite uma pergunta antes de enviar.";
+                return;
+            }
+
+            statusBox.innerText = "Consultando o último evento...";
+            responseBox.innerText = "Processando...";
+
+            try {
+                const response = await fetch("/chat", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ message: message })
+                });
+
+                if (!response.ok) {
+                    throw new Error("Erro ao consultar o chat.");
+                }
+
+                const data = await response.json();
+                responseBox.innerText = data.answer || "Nenhuma resposta retornada.";
+                statusBox.innerText = "Resposta gerada com sucesso.";
+            } catch (error) {
+                responseBox.innerText = "Não foi possível obter resposta do chat.";
+                statusBox.innerText = "Erro ao consultar o serviço.";
+                console.error(error);
+            }
+        }
+    </script>
+</body>
+</html>
