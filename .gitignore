@@ -1,2 +1,8 @@
 /.claude
 /.venv
+/venv
+__pycache__/
+*.pyc
+*.pt
+detections.db
+static/captures/
