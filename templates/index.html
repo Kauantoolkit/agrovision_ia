@@ -3,187 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>AgroVision AI</title>
-
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f4f6f8;
-            margin: 0;
-            padding: 20px;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        h1 { margin-bottom: 8px; }
-        p { color: #555; }
-
-        .grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            margin-top: 20px;
-        }
-
-        .card {
-            background: white;
-            border-radius: 14px;
-            padding: 18px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-        }
-
-        img {
-            width: 100%;
-            border-radius: 10px;
-            border: 1px solid #ddd;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-        }
-
-        th, td {
-            text-align: left;
-            padding: 10px;
-            border-bottom: 1px solid #e5e7eb;
-        }
-
-        th { background: #f9fafb; }
-
-        .badge {
-            background: #e8f5e9;
-            color: #1b5e20;
-            padding: 5px 10px;
-            border-radius: 999px;
-            font-size: 12px;
-            display: inline-block;
-        }
-
-        a { color: #0b57d0; text-decoration: none; }
-        a:hover { text-decoration: underline; }
-
-        /* ---- Chat ---- */
-        .chat-box {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            margin-top: 10px;
-        }
-
-        /* Histórico de conversa */
-        .chat-history {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            max-height: 360px;
-            overflow-y: auto;
-            padding: 4px 2px;
-        }
-
-        .chat-bubble {
-            padding: 10px 14px;
-            border-radius: 12px;
-            max-width: 88%;
-            white-space: pre-wrap;
-            font-size: 14px;
-            line-height: 1.5;
-        }
-
-        .chat-bubble.user {
-            background: #0b57d0;
-            color: white;
-            align-self: flex-end;
-            border-bottom-right-radius: 4px;
-        }
-
-        .chat-bubble.assistant {
-            background: #f1f5f9;
-            color: #1e293b;
-            align-self: flex-start;
-            border-bottom-left-radius: 4px;
-            border: 1px solid #e2e8f0;
-        }
-
-        .chat-bubble.assistant.streaming {
-            border-color: #0b57d0;
-        }
-
-        .chat-input-row {
-            display: flex;
-            gap: 8px;
-            align-items: flex-end;
-        }
-
-        .chat-input-row textarea {
-            flex: 1;
-            min-height: 60px;
-            resize: vertical;
-            padding: 10px 12px;
-            border-radius: 10px;
-            border: 1px solid #d1d5db;
-            font-size: 14px;
-            font-family: Arial, sans-serif;
-            box-sizing: border-box;
-        }
-
-        .chat-input-row textarea:focus {
-            outline: none;
-            border-color: #0b57d0;
-        }
-
-        .btn-primary {
-            background: #0b57d0;
-            color: white;
-            border: none;
-            border-radius: 10px;
-            padding: 10px 18px;
-            cursor: pointer;
-            font-size: 14px;
-            white-space: nowrap;
-        }
-
-        .btn-primary:disabled {
-            background: #93b4e6;
-            cursor: not-allowed;
-        }
-
-        .btn-primary:not(:disabled):hover {
-            background: #084298;
-        }
-
-        .btn-secondary {
-            background: transparent;
-            color: #64748b;
-            border: 1px solid #cbd5e1;
-            border-radius: 10px;
-            padding: 8px 14px;
-            cursor: pointer;
-            font-size: 13px;
-        }
-
-        .btn-secondary:hover {
-            background: #f1f5f9;
-        }
-
-        .chat-footer {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .chat-status {
-            font-size: 12px;
-            color: #94a3b8;
-        }
-
-        @media (max-width: 900px) {
-            .grid { grid-template-columns: 1fr; }
-        }
-    </style>
+    <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
     <div class="container">
@@ -192,41 +12,85 @@
 
         <div class="grid">
             <div class="card">
-                <h2>Último frame</h2>
-                <img id="live-feed" src="/frame" alt="Câmera ao vivo">
+                <h2>Câmera ao vivo</h2>
+                <img id="live-feed" class="video-frame" src="/video_feed" alt="Câmera ao vivo">
 
-                <div style="margin-top:14px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    <select id="camera-select" style="flex:1; padding:8px 10px; border-radius:8px; border:1px solid #d1d5db; font-size:14px;">
-                        <option value="">Carregando câmeras...</option>
-                    </select>
-                    <button onclick="applyCamera()" class="btn-primary" id="camera-apply-btn">Usar</button>
-                    <button onclick="loadCameras()" class="btn-secondary">Atualizar lista</button>
+                <!-- Tabs: local / URL / Windy -->
+                <div class="cam-tabs">
+                    <button class="cam-tab active" id="tab-btn-local" onclick="switchCamTab('local')">
+                        📷 Local
+                    </button>
+                    <button class="cam-tab" id="tab-btn-url" onclick="switchCamTab('url')">
+                        🌐 URL
+                    </button>
+                    <button class="cam-tab" id="tab-btn-windy" onclick="switchCamTab('windy')">
+                        🌍 Públicas
+                    </button>
                 </div>
-                <div id="camera-status" style="font-size:12px; color:#94a3b8; margin-top:6px;"></div>
+
+                <!-- Panel: local cameras -->
+                <div class="cam-panel active" id="cam-panel-local">
+                    <div class="cam-row">
+                        <select id="camera-select">
+                            <option value="">Detectando câmeras...</option>
+                        </select>
+                        <button onclick="applyLocalCamera()" class="btn-primary" id="camera-apply-btn">Usar</button>
+                        <button onclick="loadCameras()" class="btn-secondary">↺</button>
+                    </div>
+                </div>
+
+                <!-- Panel: URL / public stream -->
+                <div class="cam-panel" id="cam-panel-url">
+                    <div class="cam-row">
+                        <input type="text" id="stream-url"
+                            placeholder="Cole aqui a URL do stream (RTSP, MJPEG, HLS, YouTube Live...)" />
+                        <button onclick="applyStreamUrl()" class="btn-primary" id="url-apply-btn">Conectar</button>
+                    </div>
+                    <div class="url-examples">
+                        <span>Exemplos rápidos:</span>
+                        <button onclick="fillExample('rtsp')">RTSP</button>
+                        <button onclick="fillExample('mjpeg')">MJPEG</button>
+                        <button onclick="fillExample('youtube')">YouTube Live</button>
+                    </div>
+                    <p class="url-hint">
+                        <strong>RTSP</strong> — câmeras IP (ex: câmeras de fazenda, drones).<br>
+                        <strong>MJPEG/HLS</strong> — câmeras de trânsito públicas, webcams abertas.<br>
+                        <strong>YouTube Live</strong> — streams ao vivo públicos. Requer <code>yt-dlp</code> instalado.
+                    </p>
+                </div>
+
+                <!-- Panel: Windy public cameras -->
+                <div class="cam-panel" id="cam-panel-windy">
+                    <div class="windy-nav">
+                        <button id="windy-prev" onclick="windyNavigate(-1)" disabled>&#8592;</button>
+                        <div class="windy-info">
+                            <strong id="windy-title">Carregando câmeras...</strong>
+                            <span id="windy-location">Powered by Windy Webcams</span>
+                        </div>
+                        <span class="windy-counter" id="windy-counter"></span>
+                        <button id="windy-next" onclick="windyNavigate(1)" disabled>&#8594;</button>
+                    </div>
+                </div>
+
+                <div id="camera-status" style="font-size:12px; color:#94a3b8; margin-top:8px;"></div>
             </div>
 
             <div class="card">
                 <h2>Eventos recentes</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Data/Hora</th>
-                            <th>Tipo</th>
-                            <th>Confiança</th>
-                            <th>Evidência</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for event in events %}
-                        <tr>
-                            <td>{{ event.event_time }}</td>
-                            <td><span class="badge">{{ event.label }}</span></td>
-                            <td>{{ "%.2f"|format(event.confidence) }}</td>
-                            <td><a href="{{ event.image_path }}" target="_blank">Abrir</a></td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+                <div class="event-grid">
+                    {% for event in events %}
+                    <div class="event-card">
+                        <div class="event-header">
+                            <span class="badge">{{ event.label }}</span>
+                            <span class="event-conf">{{ "%.2f"|format(event.confidence) }}</span>
+                        </div>
+                        <div class="event-time">{{ event.event_time }}</div>
+                        <a class="event-link" href="{{ event.image_path }}" target="_blank">Ver evidência →</a>
+                    </div>
+                    {% else %}
+                    <p style="color:#94a3b8; font-size:14px; grid-column: 1/-1;">Nenhum evento registrado ainda.</p>
+                    {% endfor %}
+                </div>
             </div>
         </div>
 
@@ -235,14 +99,12 @@
             <p>Faça perguntas sobre os eventos detectados. O contexto do último evento é enviado automaticamente.</p>
 
             <div class="chat-box">
-                <!-- Histórico de mensagens -->
                 <div class="chat-history" id="chat-history">
                     <div class="chat-bubble assistant">
                         Olá! Sou o assistente do AgroVision AI. Pergunte sobre os eventos detectados, câmera ou qualquer coisa relacionada ao sistema.
                     </div>
                 </div>
 
-                <!-- Campo de entrada -->
                 <div class="chat-input-row">
                     <textarea
                         id="chat-question"
@@ -252,7 +114,6 @@
                     <button id="chat-send-btn" class="btn-primary" onclick="sendQuestion()">Enviar</button>
                 </div>
 
-                <!-- Rodapé: status e limpar -->
                 <div class="chat-footer">
                     <span class="chat-status" id="chat-status">Pronto.</span>
                     <button class="btn-secondary" onclick="clearHistory()">Limpar histórico</button>
@@ -261,213 +122,6 @@
         </div>
     </div>
 
-    <script>
-        // ── Seletor de câmera ─────────────────────────────────────────
-        async function loadCameras() {
-            const select = document.getElementById("camera-select");
-            const status = document.getElementById("camera-status");
-            status.textContent = "Detectando câmeras...";
-            try {
-                const data = await fetch("/cameras").then(r => r.json());
-                select.innerHTML = "";
-                if (data.cameras.length === 0) {
-                    select.innerHTML = "<option value=''>Nenhuma câmera encontrada</option>";
-                    status.textContent = "Nenhuma câmera disponível.";
-                    return;
-                }
-                data.cameras.forEach(idx => {
-                    const opt = document.createElement("option");
-                    opt.value = idx;
-                    opt.textContent = `Câmera ${idx}`;
-                    if (idx === data.active) opt.selected = true;
-                    select.appendChild(opt);
-                });
-                status.textContent = `${data.cameras.length} câmera(s) encontrada(s). Ativa: Câmera ${data.active}.`;
-            } catch {
-                status.textContent = "Erro ao listar câmeras.";
-            }
-        }
-
-        async function applyCamera() {
-            const select = document.getElementById("camera-select");
-            const status = document.getElementById("camera-status");
-            const btn = document.getElementById("camera-apply-btn");
-            const idx = parseInt(select.value);
-            if (isNaN(idx)) return;
-            btn.disabled = true;
-            status.textContent = "Trocando câmera...";
-            try {
-                await fetch("/camera/select", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ index: idx })
-                });
-                status.textContent = `Câmera ${idx} ativada.`;
-            } catch {
-                status.textContent = "Erro ao trocar câmera.";
-            }
-            btn.disabled = false;
-        }
-
-        // Carrega câmeras ao abrir a página
-        loadCameras();
-
-        // ── Feed ao vivo ──────────────────────────────────────────────
-        (function refreshFeed() {
-            const img = document.getElementById("live-feed");
-            const next = new Image();
-            let done = false;
-
-            const timeout = setTimeout(() => {
-                if (!done) { done = true; setTimeout(refreshFeed, 200); }
-            }, 1500); // se travar por 1.5s, tenta de novo
-
-            next.onload = () => {
-                if (done) return; done = true;
-                clearTimeout(timeout);
-                img.src = next.src;
-                setTimeout(refreshFeed, 80);
-            };
-            next.onerror = () => {
-                if (done) return; done = true;
-                clearTimeout(timeout);
-                setTimeout(refreshFeed, 2000);
-            };
-            next.src = "/frame?t=" + Date.now();
-        })();
-
-        // ── Chat ─────────────────────────────────────────────────────
-        // Histórico de conversa mantido no frontend
-        let chatHistory = [];
-
-        function handleKey(event) {
-            // Ctrl+Enter ou Cmd+Enter envia
-            if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                event.preventDefault();
-                sendQuestion();
-            }
-        }
-
-        function addBubble(role, text, streaming = false) {
-            const history = document.getElementById("chat-history");
-            const bubble = document.createElement("div");
-            bubble.className = "chat-bubble " + role + (streaming ? " streaming" : "");
-            bubble.textContent = text;
-            history.appendChild(bubble);
-            history.scrollTop = history.scrollHeight;
-            return bubble;
-        }
-
-        function setStatus(text) {
-            document.getElementById("chat-status").textContent = text;
-        }
-
-        function setSendDisabled(disabled) {
-            document.getElementById("chat-send-btn").disabled = disabled;
-        }
-
-        async function sendQuestion() {
-            const questionField = document.getElementById("chat-question");
-            const message = questionField.value.trim();
-            if (!message) return;
-
-            questionField.value = "";
-            setSendDisabled(true);
-            setStatus("Consultando o modelo local...");
-
-            // Exibe a mensagem do usuário
-            addBubble("user", message);
-
-            // Bolha da IA que vai sendo preenchida via streaming
-            const aiBubble = addBubble("assistant", "▍", true);
-
-            const startedAt = Date.now();
-            let fullAnswer = "";
-
-            try {
-                const response = await fetch("/chat/stream", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ message: message, history: chatHistory })
-                });
-
-                if (!response.ok) {
-                    throw new Error("Erro HTTP " + response.status);
-                }
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    const text = decoder.decode(value, { stream: true });
-                    const lines = text.split("\n").filter(l => l.trim());
-
-                    for (const line of lines) {
-                        const chunk = JSON.parse(line);
-
-                        if (chunk.error) {
-                            aiBubble.textContent = "Erro: " + chunk.error;
-                            aiBubble.classList.remove("streaming");
-                            setStatus("Erro ao consultar o Ollama. Verifique se ele está rodando.");
-                            setSendDisabled(false);
-                            return;
-                        }
-
-                        if (chunk.delta) {
-                            fullAnswer += chunk.delta;
-                            aiBubble.textContent = fullAnswer;
-                            document.getElementById("chat-history").scrollTop =
-                                document.getElementById("chat-history").scrollHeight;
-                        }
-
-                        if (chunk.done) {
-                            aiBubble.classList.remove("streaming");
-                            // Atualiza histórico local com o retornado pelo backend
-                            if (chunk.history) {
-                                chatHistory = chunk.history;
-                            }
-                            const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-                            setStatus(`Resposta em ${elapsed}s · ${chatHistory.length / 2 | 0} trocas no histórico`);
-                        }
-                    }
-                }
-
-            } catch (err) {
-                // Fallback para endpoint síncrono
-                setStatus("Streaming falhou, tentando modo normal...");
-                try {
-                    const resp = await fetch("/chat", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ message: message, history: chatHistory })
-                    });
-                    const data = await resp.json();
-                    if (data.error) throw new Error(data.error);
-                    aiBubble.textContent = data.answer;
-                    aiBubble.classList.remove("streaming");
-                    if (data.history) chatHistory = data.history;
-                    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-                    setStatus(`Resposta em ${elapsed}s.`);
-                } catch (fallbackErr) {
-                    aiBubble.textContent = "Não foi possível obter resposta. Verifique se o Ollama está rodando.";
-                    aiBubble.classList.remove("streaming");
-                    setStatus("Erro: " + fallbackErr.message);
-                }
-            }
-
-            setSendDisabled(false);
-        }
-
-        function clearHistory() {
-            chatHistory = [];
-            const historyDiv = document.getElementById("chat-history");
-            historyDiv.innerHTML = "";
-            addBubble("assistant", "Histórico limpo. Como posso ajudar?");
-            setStatus("Histórico limpo.");
-        }
-    </script>
+    <script src="/static/dashboard.js"></script>
 </body>
 </html>

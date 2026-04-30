@@ -1,4 +1,6 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import cv2
 import time
 import uuid
@@ -10,7 +12,7 @@ import requests
 import numpy as np
 from datetime import datetime
 from collections import defaultdict, Counter
-from typing import List
+from typing import List, Union
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -43,6 +45,95 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
 MODEL_NAME = os.getenv("OLLAMA_MODEL", "llama3")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+
+# "idle" → "warming" → "ready" | "failed"
+warmup_status = "idle"
+
+# =========================
+# WINDY WEBCAMS
+# =========================
+WINDY_API_KEY = os.getenv("WINDY_API_KEY", "")
+WINDY_API_URL = "https://api.windy.com/webcams/api/v3/webcams"
+WINDY_CACHE: dict = {}   # chave: (offset, country) → {data, ts}
+WINDY_CACHE_TTL = 300    # 5 minutos
+
+
+def fetch_windy_cameras(offset: int = 0, limit: int = 20) -> dict:
+    limit = min(limit, 50)
+    cache_key = (offset, limit)
+    now = time.time()
+    cached = WINDY_CACHE.get(cache_key)
+    if cached and (now - cached["ts"]) < WINDY_CACHE_TTL:
+        return cached["data"]
+
+    collected: list = []
+    api_offset = offset  # paginação direta na API
+    api_total = 0
+
+    try:
+        for _ in range(1):  # uma única requisição por página
+            resp = requests.get(
+                WINDY_API_URL,
+                params={
+                    "limit": 50,
+                    "offset": api_offset,
+                    "include": "location,images",
+                },
+                headers={"x-windy-api-key": WINDY_API_KEY},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            api_total = data.get("total", 0)
+
+            for cam in data.get("webcams", []):
+                preview = cam.get("images", {}).get("current", {}).get("preview", "")
+                if not preview:
+                    continue
+                loc = cam.get("location", {})
+                collected.append({
+                    "id":           str(cam.get("webcamId", "")),
+                    "title":        cam.get("title", "Sem nome"),
+                    "city":         loc.get("city", ""),
+                    "country":      loc.get("country", ""),
+                    "country_code": loc.get("country_code", ""),
+                    "preview":      preview,
+                })
+
+    except Exception as exc:
+        return {"error": str(exc), "webcams": [], "total": 0}
+
+    result = {
+        "webcams": collected,
+        "total":   api_total,
+        "offset":  offset,
+        "limit":   limit,
+    }
+    WINDY_CACHE[cache_key] = {"data": result, "ts": now}
+    return result
+
+# =========================
+# RESOLUÇÃO DE STREAM
+# =========================
+def resolve_stream_url(source):
+    """Converte URLs do YouTube em links diretos usando yt-dlp (se instalado).
+    Para RTSP, MJPEG ou HLS direto, retorna como está."""
+    if not isinstance(source, str):
+        return source
+    if "youtube.com" in source or "youtu.be" in source:
+        try:
+            import yt_dlp
+            ydl_opts = {"format": "best[ext=mp4]/best", "quiet": True}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(source, download=False)
+                direct_url = info.get("url") or info["formats"][-1]["url"]
+                print(f"[Camera] URL do YouTube resolvida via yt-dlp.")
+                return direct_url
+        except ImportError:
+            print("[Camera] yt-dlp não instalado. Instale com: pip install yt-dlp")
+        except Exception as exc:
+            print(f"[Camera] Falha ao resolver YouTube URL: {exc}")
+    return source
 
 # =========================
 # APP
@@ -203,7 +294,7 @@ def process_stream():
             if cap is not None:
                 cap.release()
             current_source = requested
-            cap = cv2.VideoCapture(current_source)
+            cap = cv2.VideoCapture(resolve_stream_url(current_source))
             if cap.isOpened():
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 print(f"[Camera] Câmera {current_source} aberta.")
@@ -311,14 +402,28 @@ def get_cameras():
 
 
 class CameraSelectRequest(BaseModel):
-    index: int
+    source: Union[int, str]
 
 @app.post("/camera/select")
 def select_camera(req: CameraSelectRequest):
     global active_camera_source
     with camera_source_lock:
-        active_camera_source = req.index
-    return JSONResponse(content={"selected": req.index})
+        active_camera_source = req.source
+    return JSONResponse(content={"selected": req.source})
+
+
+@app.get("/cameras/public")
+def get_public_cameras(offset: int = 0, limit: int = 20):
+    if not WINDY_API_KEY:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "WINDY_API_KEY não configurada. Defina a variável de ambiente antes de iniciar.",
+                "webcams": [],
+                "total": 0,
+            }
+        )
+    return JSONResponse(content=fetch_windy_cameras(offset, limit))
 
 
 @app.get("/events")
@@ -493,10 +598,14 @@ def stream_ollama(message: str, history: List[Message]):
 
 
 def warmup_ollama():
+    global warmup_status
+    warmup_status = "warming"
     try:
         ask_ollama("Responda apenas: pronto", [])
+        warmup_status = "ready"
         print(f"[Ollama] Modelo {MODEL_NAME} aquecido.")
     except Exception as exc:
+        warmup_status = "failed"
         print(f"[Ollama] Warmup falhou: {exc}")
 
 

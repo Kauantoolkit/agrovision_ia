@@ -6,19 +6,23 @@ param(
 
 # ── Caminhos ────────────────────────────────────────────────────────────────
 $projectDir  = $PSScriptRoot
-$uvicornExe  = Join-Path $projectDir "venv\Scripts\uvicorn.exe"
-$pipExe      = Join-Path $projectDir "venv\Scripts\pip.exe"
+$uvicornExe  = Join-Path $projectDir ".venv\Scripts\uvicorn.exe"
+$pipExe      = Join-Path $projectDir ".venv\Scripts\pip.exe"
 
 Set-Location $projectDir
 
-# ── 1. Checar venv ──────────────────────────────────────────────────────────
-if (-not (Test-Path $uvicornExe)) {
-    Write-Host "[setup] Instalando dependencias (pip install -r requirements.txt)..." -ForegroundColor Yellow
-    & $pipExe install -r requirements.txt
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[ERRO] pip install falhou." -ForegroundColor Red
-        exit 1
-    }
+# ── 1. Instalar / atualizar dependencias ────────────────────────────────────
+if (-not (Test-Path $pipExe)) {
+    Write-Host "[ERRO] pip nao encontrado em .venv\Scripts\pip.exe" -ForegroundColor Red
+    Write-Host "       Crie o venv com: python -m venv .venv" -ForegroundColor Yellow
+    exit 1
+}
+
+Write-Host "[setup] Instalando dependencias (pip install -r requirements.txt)..." -ForegroundColor Yellow
+& $pipExe install -r requirements.txt --quiet
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[ERRO] pip install falhou." -ForegroundColor Red
+    exit 1
 }
 
 # ── 2. Checar Ollama instalado ───────────────────────────────────────────────

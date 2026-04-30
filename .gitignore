@@ -6,3 +6,4 @@ __pycache__/
 *.pt
 detections.db
 static/captures/
+.env
