@@ -96,6 +96,12 @@
 
         <div class="card" style="margin-top: 20px;">
             <h2>Chat — Assistente AgroVision (Llama local)</h2>
+            <div class="model-row">
+                <label for="model-select">Modelo:</label>
+                <select id="model-select" onchange="selectModel(this.value)">
+                    <option value="">Carregando...</option>
+                </select>
+            </div>
             <p>Faça perguntas sobre os eventos detectados. O contexto do último evento é enviado automaticamente.</p>
 
             <div class="chat-box">

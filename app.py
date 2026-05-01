@@ -42,7 +42,7 @@ ALERT_COOLDOWN_SECONDS = 20
 # OLLAMA
 # =========================
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
-MODEL_NAME = os.getenv("OLLAMA_MODEL", "llama3")
+MODEL_NAME = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 
@@ -143,6 +143,13 @@ app = FastAPI(title="AgroVision AI")
 os.makedirs("static", exist_ok=True)
 os.makedirs("templates", exist_ok=True)
 os.makedirs(SAVE_DIR, exist_ok=True)
+os.makedirs("uploads", exist_ok=True)
+os.makedirs("runs", exist_ok=True)
+os.makedirs("models", exist_ok=True)
+os.makedirs("dataset_agro/images/train", exist_ok=True)
+os.makedirs("dataset_agro/images/val", exist_ok=True)
+os.makedirs("dataset_agro/labels/train", exist_ok=True)
+os.makedirs("dataset_agro/labels/val", exist_ok=True)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -426,6 +433,29 @@ def get_public_cameras(offset: int = 0, limit: int = 20):
     return JSONResponse(content=fetch_windy_cameras(offset, limit))
 
 
+@app.get("/models")
+def get_models():
+    try:
+        base_url = OLLAMA_URL.rsplit("/api/", 1)[0]
+        resp = requests.get(f"{base_url}/api/tags", timeout=5)
+        resp.raise_for_status()
+        models = [m["name"] for m in resp.json().get("models", [])]
+        return JSONResponse(content={"models": models, "active": MODEL_NAME})
+    except Exception as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc), "models": [], "active": MODEL_NAME})
+
+
+class ModelSelectRequest(BaseModel):
+    model: str
+
+
+@app.post("/model/select")
+def select_model(req: ModelSelectRequest):
+    global MODEL_NAME
+    MODEL_NAME = req.model
+    return JSONResponse(content={"selected": MODEL_NAME})
+
+
 @app.get("/events")
 def get_events():
     return JSONResponse(content=list_events(50))
@@ -521,31 +551,22 @@ def build_chat_messages(message: str, history: List[Message]) -> list:
         "role": "system",
         "content": (
             "Você é um assistente do sistema AgroVision AI, especializado em monitoramento rural. "
-            "Responda em português, de forma clara, objetiva e útil. "
-            "Use APENAS os dados fornecidos abaixo como fonte de verdade. "
-            "Nunca invente IDs, horários, objetos ou contagens que não estejam listados aqui."
+            "Responda em português, de forma clara, objetiva e útil."
         )
     }
     messages = [system_msg]
 
-    eventos = list_events(1000)
-    if eventos:
-        linhas = []
-        for ev in eventos:
-            linhas.append(
-                f"  - [{ev['event_time']}] {ev['label']} "
-                f"(confiança: {ev['confidence']:.2f}, id: {ev['id']})"
-            )
-        contagem = Counter(ev["label"] for ev in eventos)
-        resumo = ", ".join(f"{k}: {v}" for k, v in contagem.items())
-
-        ctx = (
-            f"DADOS REAIS DO BANCO (últimos {len(eventos)} eventos, do mais recente ao mais antigo):\n"
-            + "\n".join(linhas)
-            + f"\n\nResumo por tipo: {resumo}"
-            + f"\nTotal listado acima: {len(eventos)} eventos."
+    last_event = get_last_event()
+    if last_event:
+        event_ctx = (
+            f"Último evento detectado:\n"
+            f"- ID: {last_event['id']}\n"
+            f"- Horário: {last_event['event_time']}\n"
+            f"- Objeto: {last_event['label']}\n"
+            f"- Confiança: {last_event['confidence']:.2f}\n"
+            f"- Imagem: {last_event['image_path']}\n"
         )
-        messages.append({"role": "system", "content": ctx})
+        messages.append({"role": "system", "content": event_ctx})
     else:
         messages.append({"role": "system", "content": "Nenhum evento registrado no banco ainda."})
 

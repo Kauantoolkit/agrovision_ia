@@ -1,23 +1,30 @@
 param(
-    [string]$Model   = "llama3",
-    [string]$AppHost = "127.0.0.1",
-    [int]   $Port    = 8000
+    [string]$Model      = "llama3.2:1b",
+    [string]$AppHost    = "127.0.0.1",
+    [int]   $Port       = 8001,
+    [switch]$Foreground
 )
 
 # ── Caminhos ────────────────────────────────────────────────────────────────
 $projectDir  = $PSScriptRoot
-$uvicornExe  = Join-Path $projectDir ".venv\Scripts\uvicorn.exe"
-$pipExe      = Join-Path $projectDir ".venv\Scripts\pip.exe"
+$venvDir     = Join-Path $projectDir ".venv"
+$uvicornExe  = Join-Path $venvDir "Scripts\uvicorn.exe"
+$pipExe      = Join-Path $venvDir "Scripts\pip.exe"
 
 Set-Location $projectDir
 
-# ── 1. Instalar / atualizar dependencias ────────────────────────────────────
+# ── 0. Desbloquear scripts na sessão atual ───────────────────────────────────
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+
+# ── 1. Verificar .venv ──────────────────────────────────────────────────────
 if (-not (Test-Path $pipExe)) {
     Write-Host "[ERRO] pip nao encontrado em .venv\Scripts\pip.exe" -ForegroundColor Red
-    Write-Host "       Crie o venv com: python -m venv .venv" -ForegroundColor Yellow
+    Write-Host "       Crie o venv com Python 3.11.15:" -ForegroundColor Yellow
+    Write-Host "       py -3.11 -m venv .venv" -ForegroundColor Yellow
     exit 1
 }
 
+# ── 2. Instalar / atualizar dependencias ────────────────────────────────────
 Write-Host "[setup] Instalando dependencias (pip install -r requirements.txt)..." -ForegroundColor Yellow
 & $pipExe install -r requirements.txt --quiet
 if ($LASTEXITCODE -ne 0) {
@@ -25,30 +32,30 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# ── 2. Checar Ollama instalado ───────────────────────────────────────────────
+# ── 3. Checar Ollama instalado ───────────────────────────────────────────────
 if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
     Write-Host "[ERRO] Ollama nao encontrado no PATH." -ForegroundColor Red
     Write-Host "       Baixe em: https://ollama.com/download" -ForegroundColor Yellow
     exit 1
 }
 
-# ── 3. Subir Ollama se nao estiver rodando ───────────────────────────────────
+# ── 4. Subir Ollama se nao estiver rodando ───────────────────────────────────
 $ollamaRunning = $false
 try {
     $resp = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:11434/api/tags" -TimeoutSec 2 -ErrorAction Stop
     $ollamaRunning = ($resp.StatusCode -eq 200)
 } catch {}
 
-$ollamaProcess = $null
+$startedOllamaProcess = $null
 if (-not $ollamaRunning) {
     Write-Host "[ollama] Iniciando servidor Ollama em background..." -ForegroundColor Cyan
-    $ollamaProcess = Start-Process "ollama" -ArgumentList "serve" -PassThru -WindowStyle Hidden
+    $startedOllamaProcess = Start-Process "ollama" -ArgumentList "serve" -PassThru -WindowStyle Hidden
     Start-Sleep -Seconds 3
 } else {
     Write-Host "[ollama] Servidor ja esta rodando." -ForegroundColor Green
 }
 
-# ── 4. Garantir que o modelo existe ─────────────────────────────────────────
+# ── 5. Garantir que o modelo existe ─────────────────────────────────────────
 Write-Host "[ollama] Verificando modelo '$Model'..." -ForegroundColor Cyan
 $tags = (Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -ErrorAction SilentlyContinue)
 $modeloExiste = ($tags.models | Where-Object { $_.name -like "$Model*" }).Count -gt 0
@@ -64,7 +71,7 @@ if (-not $modeloExiste) {
     Write-Host "[ollama] Modelo '$Model' ja disponivel." -ForegroundColor Green
 }
 
-# ── 5. Rodar FastAPI ─────────────────────────────────────────────────────────
+# ── 6. Rodar FastAPI ─────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
 Write-Host "  AgroVision AI" -ForegroundColor Green
@@ -74,11 +81,19 @@ Write-Host "  Ctrl+C para encerrar" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
 
+if ($Foreground) {
+    Write-Host "[server] Iniciando FastAPI em foreground..." -ForegroundColor Cyan
+} else {
+    Write-Host "[server] Iniciando FastAPI..." -ForegroundColor Cyan
+}
+
+$env:OLLAMA_MODEL = $Model
+
 try {
     & $uvicornExe "app:app" "--host" $AppHost "--port" $Port "--reload"
 } finally {
-    if ($ollamaProcess -and -not $ollamaProcess.HasExited) {
+    if ($startedOllamaProcess -and -not $startedOllamaProcess.HasExited) {
         Write-Host "[ollama] Encerrando servidor Ollama..." -ForegroundColor Yellow
-        Stop-Process -Id $ollamaProcess.Id -Force -ErrorAction SilentlyContinue
+        Stop-Process -Id $startedOllamaProcess.Id -Force -ErrorAction SilentlyContinue
     }
 }

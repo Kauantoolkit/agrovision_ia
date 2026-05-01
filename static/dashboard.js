@@ -214,6 +214,39 @@ async function windyNavigate(dir) {
 // ── Chat ──────────────────────────────────────────────────────
 let chatHistory = [];
 
+async function loadModels() {
+    try {
+        const data = await fetch("/models").then(r => r.json());
+        const select = document.getElementById("model-select");
+        select.innerHTML = "";
+        data.models.forEach(m => {
+            const opt = document.createElement("option");
+            opt.value = m;
+            opt.textContent = m;
+            if (m === data.active) opt.selected = true;
+            select.appendChild(opt);
+        });
+    } catch {
+        document.getElementById("model-select").innerHTML = "<option>Erro ao carregar</option>";
+    }
+}
+
+async function selectModel(model) {
+    if (!model) return;
+    try {
+        await fetch("/model/select", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model })
+        });
+        setStatus("Modelo trocado para " + model);
+    } catch {
+        setStatus("Erro ao trocar modelo.");
+    }
+}
+
+loadModels();
+
 function handleKey(event) {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
@@ -253,6 +286,7 @@ async function sendQuestion() {
 
     const startedAt  = Date.now();
     let   fullAnswer = "";
+    let   firstTokenAt = null;
 
     try {
         const response = await fetch("/chat/stream", {
@@ -283,6 +317,11 @@ async function sendQuestion() {
                 }
 
                 if (chunk.delta) {
+                    if (firstTokenAt === null) {
+                        firstTokenAt = Date.now();
+                        const ttft = ((firstTokenAt - startedAt) / 1000).toFixed(1);
+                        setStatus("Primeira palavra em " + ttft + "s...");
+                    }
                     fullAnswer += chunk.delta;
                     aiBubble.textContent = fullAnswer;
                     document.getElementById("chat-history").scrollTop =
@@ -293,7 +332,8 @@ async function sendQuestion() {
                     aiBubble.classList.remove("streaming");
                     if (chunk.history) chatHistory = chunk.history;
                     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-                    setStatus(`Resposta em ${elapsed}s · ${chatHistory.length / 2 | 0} trocas no histórico`);
+                    const ttft = firstTokenAt ? ((firstTokenAt - startedAt) / 1000).toFixed(1) : "?";
+                    setStatus("Primeira palavra: " + ttft + "s · Total: " + elapsed + "s · " + (chatHistory.length / 2 | 0) + " trocas");
                 }
             }
         }
