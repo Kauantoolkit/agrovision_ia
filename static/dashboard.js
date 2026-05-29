@@ -1,3 +1,39 @@
+// ── HLS player ────────────────────────────────────────────────
+let hlsInstance = null;
+
+function switchToHLS(url) {
+    const img   = document.getElementById("live-feed-img");
+    const video = document.getElementById("live-feed-video");
+    if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+    img.style.display   = "none";
+    video.style.display = "block";
+    if (typeof Hls !== "undefined" && Hls.isSupported()) {
+        hlsInstance = new Hls();
+        hlsInstance.loadSource(url);
+        hlsInstance.attachMedia(video);
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => video.play());
+        hlsInstance.on(Hls.Events.ERROR, (_, data) => {
+            if (data.fatal)
+                document.getElementById("camera-status").textContent = "Erro HLS: " + data.details;
+        });
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = url;
+        video.play();
+    } else {
+        document.getElementById("camera-status").textContent = "HLS não suportado neste browser.";
+    }
+}
+
+function switchToMJPEG() {
+    const img   = document.getElementById("live-feed-img");
+    const video = document.getElementById("live-feed-video");
+    if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+    video.style.display = "none";
+    video.src           = "";
+    img.style.display   = "block";
+    img.src             = "/video_feed";
+}
+
 // ── Camera tabs ───────────────────────────────────────────────
 let activeCamTab = "local";
 
@@ -10,7 +46,7 @@ function switchCamTab(tab) {
     if (tab !== "windy") {
         clearInterval(windyRefreshTimer);
         windyRefreshTimer = null;
-        document.getElementById("live-feed").src = "/video_feed";
+        switchToMJPEG();
     }
     if (tab === "windy" && windyCameras.length === 0) {
         loadWindyCameras(0);
@@ -57,53 +93,109 @@ async function loadCameras() {
     }
 }
 
+// ── Camera status polling ─────────────────────────────────────
+let cameraStatusPoller = null;
+
+function startCameraStatusPolling(btn) {
+    stopCameraStatusPolling();
+    const status = document.getElementById("camera-status");
+    cameraStatusPoller = setInterval(async () => {
+        try {
+            const data = await fetch("/camera/status").then(r => r.json());
+            status.textContent = data.message;
+            if (data.state === "connected" || data.state === "error") {
+                stopCameraStatusPolling();
+                if (btn) btn.disabled = false;
+            }
+        } catch {
+            // ignora falhas de rede durante polling
+        }
+    }, 1500);
+}
+
+function stopCameraStatusPolling() {
+    if (cameraStatusPoller) {
+        clearInterval(cameraStatusPoller);
+        cameraStatusPoller = null;
+    }
+}
+
 async function applyLocalCamera() {
     const select = document.getElementById("camera-select");
-    const status = document.getElementById("camera-status");
     const btn    = document.getElementById("camera-apply-btn");
     const idx    = parseInt(select.value);
     if (isNaN(idx)) return;
     btn.disabled = true;
-    status.textContent = "Trocando para câmera local...";
+    document.getElementById("camera-status").textContent = "Trocando câmera...";
     try {
         await fetch("/camera/select", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ source: idx })
         });
-        status.textContent = `Câmera ${idx} ativada.`;
+        switchToMJPEG();
+        startCameraStatusPolling(btn);
     } catch {
-        status.textContent = "Erro ao trocar câmera.";
+        document.getElementById("camera-status").textContent = "Erro ao trocar câmera.";
+        btn.disabled = false;
     }
-    btn.disabled = false;
 }
 
 // ── Stream by URL ─────────────────────────────────────────────
 async function applyStreamUrl() {
     const input  = document.getElementById("stream-url");
-    const status = document.getElementById("camera-status");
     const btn    = document.getElementById("url-apply-btn");
     const url    = input.value.trim();
     if (!url) {
-        status.textContent = "Cole uma URL antes de conectar.";
+        document.getElementById("camera-status").textContent = "Cole uma URL antes de conectar.";
         return;
     }
     btn.disabled = true;
+    const isHLS     = url.includes(".m3u8");
     const isYoutube = url.includes("youtube.com") || url.includes("youtu.be");
-    status.textContent = isYoutube
-        ? "Resolvendo stream do YouTube (pode demorar alguns segundos)..."
-        : "Conectando ao stream...";
-    try {
-        await fetch("/camera/select", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ source: url })
-        });
-        status.textContent = `Stream conectado: ${url.length > 60 ? url.slice(0, 57) + "..." : url}`;
-    } catch {
-        status.textContent = "Erro ao conectar ao stream.";
+
+    if (isHLS) {
+        // Toca direto no browser via hls.js — sem passar pelo backend
+        document.getElementById("camera-status").textContent = "Conectando ao stream HLS...";
+        switchToHLS(url);
+        document.getElementById("camera-status").textContent = "Stream HLS conectado.";
+        btn.disabled = false;
+    } else if (isYoutube) {
+        // Backend resolve a URL, browser toca com hls.js
+        document.getElementById("camera-status").textContent = "Resolvendo URL do YouTube (até 30s)...";
+        try {
+            const resp = await fetch("/stream/resolve", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url })
+            });
+            const data = await resp.json();
+            if (data.error) {
+                document.getElementById("camera-status").textContent = "Erro: " + data.error;
+            } else {
+                switchToHLS(data.resolved_url);
+                document.getElementById("camera-status").textContent = "YouTube conectado via HLS.";
+            }
+        } catch (e) {
+            document.getElementById("camera-status").textContent = "Erro: " + e.message;
+        }
+        btn.disabled = false;
+    } else {
+        // RTSP / MJPEG — proxy pelo backend + OpenCV
+        document.getElementById("camera-status").textContent = "Enviando requisição...";
+        try {
+            await fetch("/camera/select", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ source: url })
+            });
+            switchToMJPEG();
+            startCameraStatusPolling(btn);
+        } catch {
+            document.getElementById("camera-status").textContent = "Erro ao conectar ao stream.";
+            btn.disabled = false;
+        }
     }
-    btn.disabled = false;
 }
 
 loadCameras();
@@ -165,7 +257,7 @@ async function loadWindyCameras(offset) {
 function windyRefreshSnapshot() {
     if (activeCamTab !== "windy" || windyCameras.length === 0) return;
     const cam = windyCameras[windyIndex];
-    document.getElementById("live-feed").src = cam.preview + "?t=" + Date.now();
+    document.getElementById("live-feed-img").src = cam.preview + "?t=" + Date.now();
 }
 
 function showWindyCamera(idx) {
@@ -184,7 +276,7 @@ function showWindyCamera(idx) {
     document.getElementById("windy-counter").textContent =
         `${globalIndex.toLocaleString()} / ${windyTotal.toLocaleString()}`;
 
-    document.getElementById("live-feed").src = cam.preview;
+    document.getElementById("live-feed-img").src = cam.preview;
 
     clearInterval(windyRefreshTimer);
     windyRefreshTimer = setInterval(windyRefreshSnapshot, WINDY_REFRESH);
@@ -210,6 +302,107 @@ async function windyNavigate(dir) {
         showWindyCamera(windyIndex);
     }
 }
+
+// ── Scraping: Clima ───────────────────────────────────────────
+const WEATHER_ICONS = {
+    rain:    "🌧️",
+    cloudy:  "🌥️",
+    clear:   "☀️",
+    cold:    "🥶",
+};
+
+function weatherIcon(c) {
+    if (c.precipitation > 0)  return WEATHER_ICONS.rain;
+    if (c.humidity     > 80)  return WEATHER_ICONS.cloudy;
+    if (c.temperature  < 10)  return WEATHER_ICONS.cold;
+    return WEATHER_ICONS.clear;
+}
+
+function weatherCondition(c) {
+    if (c.precipitation > 0) return "Chuva";
+    if (c.humidity > 80)     return "Nublado";
+    if (c.temperature < 10)  return "Frio";
+    return "Tempo limpo";
+}
+
+async function loadWeather() {
+    try {
+        const data = await fetch("/scraping/weather").then(r => r.json());
+        if (data.error) {
+            document.getElementById("weather-error").textContent = data.error;
+            return;
+        }
+        const c = data.current;
+
+        document.getElementById("weather-icon-big").textContent   = weatherIcon(c);
+        document.getElementById("weather-temp-big").textContent   = `${c.temperature}°C`;
+        document.getElementById("weather-condition").textContent  = weatherCondition(c);
+        document.getElementById("weather-humidity").textContent   = `${c.humidity}%`;
+        document.getElementById("weather-wind").textContent       = `${c.windspeed} km/h`;
+        document.getElementById("weather-rain").textContent       = `${c.precipitation} mm`;
+        document.getElementById("weather-time").textContent       = data.cached_at;
+        document.getElementById("weather-badge").textContent      =
+            c.precipitation > 0 ? "Chuva" : "Seco";
+
+        const forecastEl = document.getElementById("weather-forecast");
+        forecastEl.innerHTML = "";
+        (data.forecast || []).forEach(day => {
+            const div = document.createElement("div");
+            div.className = "forecast-day";
+            const rainText = day.rain > 0 ? `💧 ${day.rain}mm` : "–";
+            div.innerHTML =
+                `<div class="forecast-date">${day.date.slice(5)}</div>
+                 <div class="forecast-temps">${day.max}° / ${day.min}°</div>
+                 <div class="forecast-rain">${rainText}</div>`;
+            forecastEl.appendChild(div);
+        });
+    } catch (e) {
+        document.getElementById("weather-error").textContent = "Erro: " + e.message;
+    }
+}
+
+// ── Scraping: Notícias ────────────────────────────────────────
+async function loadAgroNews() {
+    const list = document.getElementById("agro-news");
+    list.innerHTML = `<li class="news-item"><span class="news-num">—</span>
+        <span class="news-body" style="color:#94a3b8">Carregando notícias...</span></li>`;
+    try {
+        const data = await fetch("/scraping/news?limit=5").then(r => r.json());
+        list.innerHTML = "";
+
+        if (!Array.isArray(data) || data.length === 0) {
+            list.innerHTML = `<li style="color:#94a3b8;font-size:13px;padding:8px 0">Nenhuma notícia encontrada.</li>`;
+            return;
+        }
+
+        data.forEach((item, i) => {
+            if (item.error) {
+                document.getElementById("news-error").textContent = item.error;
+                return;
+            }
+            const li = document.createElement("li");
+            li.className = "news-item";
+
+            const titleEl = item.link
+                ? `<a href="${item.link}" target="_blank" rel="noopener">${item.title}</a>`
+                : `<span>${item.title}</span>`;
+
+            li.innerHTML =
+                `<span class="news-num">${i + 1}</span>
+                 <span class="news-body">
+                     ${titleEl}
+                     <span class="news-src">${item.source || ""}</span>
+                 </span>`;
+            list.appendChild(li);
+        });
+    } catch (e) {
+        list.innerHTML = "";
+        document.getElementById("news-error").textContent = "Erro: " + e.message;
+    }
+}
+
+loadWeather();
+loadAgroNews();
 
 // ── Chat ──────────────────────────────────────────────────────
 let chatHistory = [];

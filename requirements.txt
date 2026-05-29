@@ -9,3 +9,5 @@ requests
 yt-dlp
 python-dotenv
 numpy
+beautifulsoup4
+lxml

@@ -10,6 +10,7 @@ import sqlite3
 import threading
 import requests
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime
 from collections import defaultdict, Counter
 from typing import List, Union
@@ -20,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from ultralytics import YOLO
+import scraper
 
 # =========================
 # CONFIGURAÇÕES
@@ -42,7 +44,7 @@ ALERT_COOLDOWN_SECONDS = 20
 # OLLAMA
 # =========================
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
-MODEL_NAME = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+MODEL_NAME = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 
@@ -115,24 +117,52 @@ def fetch_windy_cameras(offset: int = 0, limit: int = 20) -> dict:
 # =========================
 # RESOLUÇÃO DE STREAM
 # =========================
+def _yt_dlp_extract(source: str) -> str:
+    import yt_dlp
+    ydl_opts = {
+        "format": "best[protocol^=m3u8]/best[protocol^=https]/best",
+        "quiet": True,
+        "noplaylist": True,
+        "socket_timeout": 15,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(source, download=False)
+        direct_url = info.get("url")
+        if not direct_url:
+            formats = info.get("formats", [])
+            m3u8 = [f for f in formats if "m3u8" in (f.get("protocol") or "")]
+            direct_url = (m3u8 or formats)[-1]["url"]
+        return direct_url
+
+
 def resolve_stream_url(source):
     """Converte URLs do YouTube em links diretos usando yt-dlp (se instalado).
     Para RTSP, MJPEG ou HLS direto, retorna como está."""
     if not isinstance(source, str):
         return source
     if "youtube.com" in source or "youtu.be" in source:
+        set_camera_status("resolving", "Resolvendo URL do YouTube via yt-dlp...")
         try:
-            import yt_dlp
-            ydl_opts = {"format": "best[ext=mp4]/best", "quiet": True}
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(source, download=False)
-                direct_url = info.get("url") or info["formats"][-1]["url"]
-                print(f"[Camera] URL do YouTube resolvida via yt-dlp.")
-                return direct_url
+            import yt_dlp  # noqa: F401 — checa se está instalado
         except ImportError:
-            print("[Camera] yt-dlp não instalado. Instale com: pip install yt-dlp")
+            msg = "yt-dlp não instalado. Instale com: pip install yt-dlp"
+            print(f"[Camera] {msg}")
+            set_camera_status("error", msg)
+            return source
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(_yt_dlp_extract, source)
+                direct_url = future.result(timeout=30)
+            print("[Camera] URL do YouTube resolvida via yt-dlp.")
+            return direct_url
+        except FuturesTimeout:
+            msg = "Timeout ao resolver YouTube URL (>30s). Tente outra URL."
+            print(f"[Camera] {msg}")
+            set_camera_status("error", msg)
         except Exception as exc:
-            print(f"[Camera] Falha ao resolver YouTube URL: {exc}")
+            msg = f"Falha ao resolver YouTube URL: {exc}"
+            print(f"[Camera] {msg}")
+            set_camera_status("error", msg)
     return source
 
 # =========================
@@ -159,6 +189,15 @@ cv2.setLogLevel(0)  # suprime warnings do OpenCV no console
 
 last_frame = None
 last_frame_lock = threading.Lock()
+
+# Estado da câmera visível ao frontend via /camera/status
+camera_status = {"state": "connecting", "message": "Iniciando..."}
+camera_status_lock = threading.Lock()
+
+def set_camera_status(state: str, message: str):
+    with camera_status_lock:
+        camera_status["state"] = state
+        camera_status["message"] = message
 
 detection_state = defaultdict(int)
 last_alert_time = defaultdict(lambda: 0.0)
@@ -301,12 +340,17 @@ def process_stream():
             if cap is not None:
                 cap.release()
             current_source = requested
-            cap = cv2.VideoCapture(resolve_stream_url(current_source))
+            set_camera_status("connecting", f"Conectando a {current_source}...")
+            resolved = resolve_stream_url(current_source)
+            cap = cv2.VideoCapture(resolved)
             if cap.isOpened():
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                set_camera_status("connected", f"Câmera {current_source} conectada.")
                 print(f"[Camera] Câmera {current_source} aberta.")
             else:
-                print(f"[Camera] Câmera {current_source} não disponível. Tentando novamente em 3s...")
+                msg = f"Câmera {current_source} não disponível."
+                set_camera_status("error", msg)
+                print(f"[Camera] {msg} Tentando novamente em 3s...")
                 cap.release()
                 cap = None
                 time.sleep(3)
@@ -416,7 +460,42 @@ def select_camera(req: CameraSelectRequest):
     global active_camera_source
     with camera_source_lock:
         active_camera_source = req.source
+    set_camera_status("connecting", f"Conectando a {req.source}...")
     return JSONResponse(content={"selected": req.source})
+
+
+@app.get("/camera/status")
+def get_camera_status():
+    with camera_status_lock:
+        return JSONResponse(content=dict(camera_status))
+
+
+class ResolveRequest(BaseModel):
+    url: str
+
+@app.post("/stream/resolve")
+def stream_resolve(req: ResolveRequest):
+    """Resolve YouTube URL para HLS direto — browser toca com hls.js."""
+    try:
+        resolved = resolve_stream_url(req.url)
+        if resolved == req.url:
+            return JSONResponse(status_code=400, content={"error": "Não foi possível resolver a URL."})
+        return JSONResponse(content={"resolved_url": resolved})
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+# =========================
+# SCRAPING
+# =========================
+@app.get("/scraping/weather")
+def get_weather(lat: float = -23.55, lon: float = -46.63):
+    return JSONResponse(content=scraper.fetch_weather(lat, lon))
+
+
+@app.get("/scraping/news")
+def get_news(limit: int = 5):
+    return JSONResponse(content=scraper.fetch_agro_news(limit))
 
 
 @app.get("/cameras/public")
@@ -467,7 +546,13 @@ async def generate_mjpeg():
             frame = last_frame.copy() if last_frame is not None else None
 
         if frame is None:
-            await asyncio.sleep(0.1)
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n"
+                + _placeholder_frame()
+                + b"\r\n"
+            )
+            await asyncio.sleep(1.0)
             continue
 
         success, buffer = cv2.imencode(".jpg", frame)

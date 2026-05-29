@@ -13,7 +13,8 @@
         <div class="grid">
             <div class="card">
                 <h2>Câmera ao vivo</h2>
-                <img id="live-feed" class="video-frame" src="/video_feed" alt="Câmera ao vivo">
+                <img id="live-feed-img" class="video-frame" src="/video_feed" alt="Câmera ao vivo">
+                <video id="live-feed-video" class="video-frame" style="display:none;" autoplay muted playsinline></video>
 
                 <!-- Tabs: local / URL / Windy -->
                 <div class="cam-tabs">
@@ -128,6 +129,67 @@
         </div>
     </div>
 
+        <!-- Scraping: Clima + Notícias -->
+        <div class="scraping-section">
+            <div class="scraping-label">
+                <span class="scraping-dot"></span>
+                Dados externos — atualizados automaticamente
+            </div>
+            <div class="grid">
+
+                <!-- Weather card -->
+                <div class="card card-weather">
+                    <div class="weather-header">
+                        <div>
+                            <h2 class="weather-title">Clima Atual</h2>
+                            <span class="weather-updated">Atualizado às <strong id="weather-time">—</strong></span>
+                        </div>
+                        <span id="weather-badge" class="weather-badge"></span>
+                    </div>
+
+                    <div class="weather-hero">
+                        <div id="weather-icon-big" class="weather-icon-big">—</div>
+                        <div>
+                            <div id="weather-temp-big" class="weather-temp-big">—</div>
+                            <div id="weather-condition" class="weather-condition">Carregando...</div>
+                        </div>
+                    </div>
+
+                    <div class="weather-metrics">
+                        <div class="weather-metric">
+                            <div id="weather-humidity" class="weather-metric-value">—</div>
+                            <div class="weather-metric-label">Umidade</div>
+                        </div>
+                        <div class="weather-metric">
+                            <div id="weather-wind" class="weather-metric-value">—</div>
+                            <div class="weather-metric-label">Vento</div>
+                        </div>
+                        <div class="weather-metric">
+                            <div id="weather-rain" class="weather-metric-value">—</div>
+                            <div class="weather-metric-label">Chuva</div>
+                        </div>
+                    </div>
+
+                    <div id="weather-forecast" class="forecast-row"></div>
+                    <div id="weather-error" class="weather-error"></div>
+                    <div class="data-source-weather">Open-Meteo · open-meteo.com · gratuito, sem API key</div>
+                </div>
+
+                <!-- News card -->
+                <div class="card card-news">
+                    <div class="news-header">
+                        <h2 class="news-title-h">Notícias do Agronegócio</h2>
+                        <span class="news-badge">RSS</span>
+                    </div>
+                    <ul id="agro-news" class="news-list"></ul>
+                    <div id="news-error" class="news-error"></div>
+                    <div class="data-source-news">Google News · RSS público · sem API key</div>
+                </div>
+
+            </div>
+        </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
     <script src="/static/dashboard.js"></script>
 </body>
 </html>
